@@ -2,6 +2,9 @@
 debs/
 *.deb
 
+# Logs generados al ejecutar el instalador
+logs/
+
 # macOS metadata
 .DS_Store
 .Spotlight-V100
