@@ -90,8 +90,32 @@ done
 alsactl store 2>/dev/null || true
 echo "    ✓ Niveles guardados"
 
-# ─── 5) Firefox: user.js con aceleración GPU ─────────────────────
-c_ylw "[4/5] Optimizando Firefox para el usuario real…"
+# ─── 5) VAAPI: hardware video decode (Intel HD 5000/6000) ────────
+c_ylw "[4/6] Instalando VAAPI (i965-va-driver + libva)…"
+VAAPI_DEBS=(
+  "$SCRIPT_DIR/debs/libva2_"*"_amd64.deb"
+  "$SCRIPT_DIR/debs/libva-drm2_"*"_amd64.deb"
+  "$SCRIPT_DIR/debs/libva-x11-2_"*"_amd64.deb"
+  "$SCRIPT_DIR/debs/libva-glx2_"*"_amd64.deb"
+  "$SCRIPT_DIR/debs/i965-va-driver_"*"_amd64.deb"
+  "$SCRIPT_DIR/debs/vainfo_"*"_amd64.deb"
+)
+shopt -s nullglob
+FOUND_DEBS=()
+for pat in "${VAAPI_DEBS[@]}"; do
+  for f in $pat; do [[ -f "$f" ]] && FOUND_DEBS+=("$f"); done
+done
+shopt -u nullglob
+if [[ ${#FOUND_DEBS[@]} -ge 5 ]]; then
+  dpkg -i "${FOUND_DEBS[@]}" 2>&1 || c_red "  ⚠ dpkg devolvió errores VAAPI"
+  echo "    Verificando VAAPI con vainfo:"
+  vainfo 2>&1 | head -15 || true
+else
+  c_ylw "    ⏭ .deb de VAAPI no encontrados en $SCRIPT_DIR/debs/"
+fi
+
+# ─── 6) Firefox: user.js con aceleración GPU ─────────────────────
+c_ylw "[5/6] Optimizando Firefox para el usuario real…"
 REAL_USER="${SUDO_USER:-$USER}"
 USER_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 
@@ -147,7 +171,7 @@ JSEOF
 fi
 
 # Variable de entorno EGL (necesaria para WebRender/VAAPI en X11)
-c_ylw "[5/5] Configurando MOZ_X11_EGL en /etc/environment…"
+c_ylw "[6/6] Configurando MOZ_X11_EGL en /etc/environment…"
 if ! grep -q "MOZ_X11_EGL" /etc/environment 2>/dev/null; then
   echo 'MOZ_X11_EGL=1' >> /etc/environment
   echo "    ✓ MOZ_X11_EGL=1 añadido"
