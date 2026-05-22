@@ -16,6 +16,20 @@
 #   9. Reduce GTK animations en LightDM/Cinnamon (opcional)
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── Logging: guardar TODO (stdout+stderr) en el USB junto al script ──
+LOG_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+LOG_FILE="$LOG_DIR/optimize-system_$(date +%Y%m%d-%H%M%S).log"
+if ! touch "$LOG_FILE" 2>/dev/null; then
+  LOG_FILE="/tmp/optimize-system_$(date +%Y%m%d-%H%M%S).log"
+  echo "⚠ No se pudo escribir en USB, log en: $LOG_FILE"
+fi
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "── Log: $LOG_FILE"
+echo "── Fecha: $(date)"
+
 c_red()  { printf "\033[1;31m%s\033[0m\n" "$*"; }
 c_grn()  { printf "\033[1;32m%s\033[0m\n" "$*"; }
 c_ylw()  { printf "\033[1;33m%s\033[0m\n" "$*"; }
