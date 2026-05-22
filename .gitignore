@@ -1,0 +1,17 @@
+# Paquetes .deb (se generan con prepare-usb.sh, demasiado pesados para git)
+debs/
+*.deb
+
+# macOS metadata
+.DS_Store
+.Spotlight-V100
+.fseventsd
+.Trashes
+
+# Linux metadata
+*~
+.directory
+
+# Backups
+*.bak
+*.backup
