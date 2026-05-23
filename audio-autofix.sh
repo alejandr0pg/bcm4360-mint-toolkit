@@ -97,6 +97,9 @@ if   ! echo "$TRIED" | grep -q S1; then NEXT="S1"
 elif ! echo "$TRIED" | grep -q S2; then NEXT="S2"
 elif ! echo "$TRIED" | grep -q S3; then NEXT="S3"
 elif ! echo "$TRIED" | grep -q S4; then NEXT="S4"
+elif ! echo "$TRIED" | grep -q S5; then NEXT="S5"
+elif ! echo "$TRIED" | grep -q S6; then NEXT="S6"
+elif ! echo "$TRIED" | grep -q S7; then NEXT="S7"
 else NEXT="EXHAUSTED"; fi
 
 c_blu "── Próxima estrategia: $NEXT"
@@ -133,6 +136,83 @@ clear_grub_cmdline() {
   update-grub 2>&1 | tail -3 || true
 }
 
+# S5: escribir firmware HDA con pin defaults exactos de CS4208 MacBookAir6,2/7,2
+# Pin defaults tomados de:
+#   https://kernel.googlesource.com/pub/scm/linux/kernel/git/tiwai/hda-emu/+/master/codecs/cs4208-macbook-air-62
+write_cs4208_firmware() {
+  mkdir -p /lib/firmware
+  cat > /lib/firmware/cs4208-mba.fw <<'FWEOF'
+[codec]
+0x10134208 0x106b7200 0
+
+[pincfg]
+0x10 0x002b4020
+0x11 0x400000f0
+0x12 0x90100110
+0x13 0x400000f0
+0x14 0x400000f0
+0x15 0x400000f0
+0x16 0x400000f0
+0x17 0x400000f0
+0x18 0x00ab9030
+0x19 0x400000f0
+0x1a 0x400000f0
+0x1b 0x400000f0
+0x1c 0x90a60100
+0x1d 0x400000f0
+0x1e 0x400000f0
+0x1f 0x400000f0
+0x20 0x400000f0
+0x21 0x400000f0
+0x22 0x400000f0
+FWEOF
+  echo "    ✓ /lib/firmware/cs4208-mba.fw escrito (pin defaults MacBookAir6,2/7,2)"
+}
+
+# S6: seleccionar un kernel != 6.14 instalado y bootearlo por default
+pick_older_kernel() {
+  # Lista kernels instalados, excluye 6.14, devuelve el mayor de los restantes
+  ls /boot/vmlinuz-* 2>/dev/null | sed 's|/boot/vmlinuz-||' | grep -v "^6\.14\." | sort -V | tail -1
+}
+
+set_grub_default_kernel() {
+  local ver="$1"
+  # Buscar la entrada de menú de GRUB que apunta a ese kernel
+  local entry
+  entry="$(awk -v ver="$ver" '
+    /^menuentry / && /Advanced/ {next}
+    /^submenu / { sub_id=gensub(/.*\x27([^\x27]+)\x27.*/, "\\1", "g"); next }
+    /^\tmenuentry/ && $0 ~ ver {
+      mn=gensub(/.*\x27([^\x27]+)\x27.*/, "\\1", "g");
+      if (sub_id) print sub_id ">" mn; else print mn;
+      exit
+    }
+  ' /boot/grub/grub.cfg 2>/dev/null)"
+  if [[ -n "$entry" ]]; then
+    sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"$entry\"|" "$GRUB_FILE"
+    update-grub 2>&1 | tail -3 || true
+    echo "    ✓ GRUB_DEFAULT → $entry"
+  else
+    echo "    ⚠ No se pudo encontrar entrada GRUB para $ver"
+    return 1
+  fi
+}
+
+# S7: cambiar de PipeWire a PulseAudio
+switch_to_pulseaudio() {
+  if command -v pulseaudio >/dev/null 2>&1; then
+    if [[ -n "${SUDO_USER:-}" ]]; then
+      sudo -u "$SUDO_USER" systemctl --user mask --now pipewire pipewire-pulse wireplumber 2>/dev/null || true
+      sudo -u "$SUDO_USER" systemctl --user unmask pulseaudio.socket pulseaudio.service 2>/dev/null || true
+      sudo -u "$SUDO_USER" systemctl --user enable --now pulseaudio.socket pulseaudio.service 2>/dev/null || true
+    fi
+    echo "    ✓ PipeWire enmascarado, PulseAudio habilitado para $SUDO_USER"
+    return 0
+  fi
+  echo "    ⚠ pulseaudio no instalado en el sistema (no se puede cambiar sin internet)"
+  return 1
+}
+
 c_ylw "[2/5] Aplicando estrategia $NEXT…"
 case "$NEXT" in
   S1)
@@ -154,19 +234,56 @@ case "$NEXT" in
     # Forzar reload de codec Cirrus + index=0 para tomar prioridad sobre HDMI
     apply_modprobe "model=auto index=0 power_save=0 probe_mask=0xffff dmic_detect=0"
     apply_grub_cmdline "snd_hda_intel.dmic_detect=0 snd_hda_intel.power_save=0 snd_hda_intel.probe_mask=0xffff snd_hda_intel.index=0"
-    # Forzar carga al inicio
     grep -qx "snd-hda-intel" /etc/modules || echo "snd-hda-intel" >> /etc/modules
+    ;;
+  S5)
+    # HDA pin remap via firmware: bypassea detección y fuerza pin defaults exactos
+    write_cs4208_firmware
+    apply_modprobe "patch=cs4208-mba.fw power_save=0 probe_mask=0xffff dmic_detect=0"
+    apply_grub_cmdline "snd_hda_intel.dmic_detect=0 snd_hda_intel.power_save=0"
+    c_blu "    → S5 fuerza los pin defaults del kernel emulator (speaker=0x12, hp=0x10)"
+    ;;
+  S6)
+    # Downgrade de kernel: regresión confirmada en 6.11+ HWE
+    c_blu "    → S6 intenta bootear un kernel != 6.14 (Mint base ships 6.8)"
+    OLDER="$(pick_older_kernel)"
+    if [[ -n "$OLDER" ]]; then
+      echo "    Kernel alternativo encontrado: $OLDER"
+      if set_grub_default_kernel "$OLDER"; then
+        c_grn "    ✓ Próximo boot → kernel $OLDER"
+        # Mantener modprobe limpio para que el kernel viejo detecte solo
+        apply_modprobe "model=auto power_save=0"
+      else
+        c_red "    ✗ No se pudo cambiar GRUB_DEFAULT"
+      fi
+    else
+      c_red "    ✗ No hay otro kernel instalado. Solo está 6.14."
+      c_red "    Necesitas linux-image-6.8.0-*-generic + headers en el USB."
+      c_red "    Avisa para descargarlos desde acá."
+    fi
+    ;;
+  S7)
+    # Switch PipeWire → PulseAudio
+    c_blu "    → S7 cambia el servidor de audio de PipeWire a PulseAudio"
+    if switch_to_pulseaudio; then
+      apply_modprobe "model=auto power_save=0"
+    else
+      c_red "    ✗ PulseAudio no disponible offline. Skip."
+    fi
     ;;
   EXHAUSTED)
     hr
-    c_red "✗ Se agotaron las 4 estrategias. Quirks probados:"
+    c_red "✗ Se agotaron las 7 estrategias. Probadas:"
     echo "  • S1: model=mba6"
     echo "  • S2: model=mbp101 + dmic_detect=0"
-    echo "  • S3: model=auto + probe_mask=0xffff + dmic_detect=0"
-    echo "  • S4: + index=0 + carga forzada al boot"
-    c_red "Próximo paso requiere análisis manual del dump:"
+    echo "  • S3: model=auto + probe_mask=0xffff"
+    echo "  • S4: + index=0 + carga forzada"
+    echo "  • S5: HDA pin retask (firmware con pin defaults exactos)"
+    echo "  • S6: downgrade a kernel != 6.14"
+    echo "  • S7: switch a PulseAudio"
+    c_red "Próximo paso: análisis manual del codec dump"
     c_red "  sudo $SCRIPT_DIR/diagnose-audio.sh"
-    c_red "Trae el tar.gz para investigar (codec dumps, dmesg completo)."
+    c_red "Trae el tar.gz y miramos juntos /proc/asound/card*/codec#*"
     echo
     echo "Para resetear y empezar de cero: rm $STATE_FILE"
     exit 2
