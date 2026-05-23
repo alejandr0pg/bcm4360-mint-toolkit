@@ -1,9 +1,13 @@
 # Paquetes .deb (se generan con prepare-usb.sh, demasiado pesados para git)
 debs/
+kernel-6.8/
 *.deb
 
 # Logs generados al ejecutar el instalador
 logs/
+
+# Estado runtime de audio-autofix.sh
+.audio-autofix-state
 
 # macOS metadata
 .DS_Store

@@ -245,21 +245,44 @@ case "$NEXT" in
     ;;
   S6)
     # Downgrade de kernel: regresión confirmada en 6.11+ HWE
-    c_blu "    → S6 intenta bootear un kernel != 6.14 (Mint base ships 6.8)"
+    c_blu "    → S6 intenta bootear un kernel != 6.14 (regresión en 6.11+)"
     OLDER="$(pick_older_kernel)"
+    if [[ -z "$OLDER" ]]; then
+      # No hay kernel alternativo. Intentar instalar 6.8 desde USB.
+      KDIR="$SCRIPT_DIR/kernel-6.8"
+      if [[ -d "$KDIR" ]] && ls "$KDIR"/linux-image-6.8*.deb >/dev/null 2>&1; then
+        c_ylw "    Instalando kernel 6.8 desde $KDIR…"
+        # Orden importa: headers comunes, headers específicos, modules, modules-extra, image
+        dpkg -i "$KDIR"/linux-headers-6.8.0-*_all.deb \
+                "$KDIR"/linux-headers-6.8.0-*-generic_*.deb \
+                "$KDIR"/linux-modules-6.8.0-*-generic_*.deb \
+                "$KDIR"/linux-modules-extra-6.8.0-*-generic_*.deb \
+                "$KDIR"/linux-image-6.8.0-*-generic_*.deb 2>&1 || \
+                c_red "    ⚠ dpkg devolvió errores (continúa)"
+        # Recompilar bcmwl contra el nuevo kernel via DKMS
+        c_ylw "    Recompilando bcmwl via DKMS para kernel 6.8…"
+        K68_VER="$(ls /lib/modules/ 2>/dev/null | grep "^6\.8\." | head -1)"
+        if [[ -n "$K68_VER" ]]; then
+          dkms autoinstall -k "$K68_VER" 2>&1 | tail -5 || \
+            c_red "    ⚠ DKMS falló para bcmwl en 6.8 (WiFi puede no funcionar en ese kernel)"
+        fi
+        OLDER="$(pick_older_kernel)"   # Re-detectar después de instalar
+      else
+        c_red "    ✗ No hay otro kernel instalado y no hay .deb de 6.8 en $KDIR/"
+        c_red "    Pide los .deb de linux-image-6.8.0-*-generic + modules + headers."
+        echo "${TRIED}${NEXT} " > "$STATE_FILE"
+        exit 2
+      fi
+    fi
     if [[ -n "$OLDER" ]]; then
-      echo "    Kernel alternativo encontrado: $OLDER"
+      echo "    Kernel alternativo: $OLDER"
       if set_grub_default_kernel "$OLDER"; then
         c_grn "    ✓ Próximo boot → kernel $OLDER"
-        # Mantener modprobe limpio para que el kernel viejo detecte solo
         apply_modprobe "model=auto power_save=0"
+        clear_grub_cmdline
       else
-        c_red "    ✗ No se pudo cambiar GRUB_DEFAULT"
+        c_red "    ✗ No se pudo cambiar GRUB_DEFAULT (entrada no encontrada en menu)"
       fi
-    else
-      c_red "    ✗ No hay otro kernel instalado. Solo está 6.14."
-      c_red "    Necesitas linux-image-6.8.0-*-generic + headers en el USB."
-      c_red "    Avisa para descargarlos desde acá."
     fi
     ;;
   S7)
